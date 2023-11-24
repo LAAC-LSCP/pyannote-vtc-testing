@@ -267,7 +267,6 @@ class TuneScipyCommand(BaseCommand):
                         list(CLASSES[args.classes]["unions"].keys()) +\
                         list(CLASSES[args.classes]["intersections"].keys())
         params["thresholds"] = {label: {"onset": random(), "offset": random()} for label in label_names}
-        print(params)
         pipeline.instantiate(params)
         for label in label_names:
             res = scipy.optimize.minimize_scalar(
@@ -278,7 +277,6 @@ class TuneScipyCommand(BaseCommand):
             params["thresholds"][label] = {'onset': threshold, 'offset': threshold}
             pipeline.instantiate(params)
 
-        print(params)
         params_filepath: Path = args.exp_dir / args.params
         logging.info(f"Saving params to {params_filepath}")
         pipeline.instantiate(params)
