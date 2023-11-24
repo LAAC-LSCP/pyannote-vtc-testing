@@ -24,7 +24,9 @@ from pytorch_lightning.callbacks import EarlyStopping
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from tqdm import tqdm
-
+from functools import partial
+import scipy
+from random import random
 
 class ProcessorChain:
 
@@ -53,6 +55,11 @@ CLASSES = {"vtcdebug": {'classes': ["READER", "AGREER", "DISAGREER"],
                          'unions': {"SPEECH": ["MAL", "FEM", "CHI", "KCHI"]},
                          'intersections': {}}
            }
+
+def validate_helper_func(current_file, pipeline, metric, label):
+    reference = current_file["annotation"].subset([label])
+    hypothesis = pipeline(current_file)
+    return metric(reference, hypothesis, current_file["annotated"])
 
 
 class BaseCommand:
@@ -190,7 +197,7 @@ class TuneCommand(BaseCommand):
         )
         # Dirty fix for the non-serialization of the task params
         pipeline = MultilabelSegmentationPipeline(segmentation=model,
-                                                  fscore=args.metric == "fscore")
+                                                  fscore=args.metric == "fscore", share_min_duration=True)
         # pipeline.instantiate(pipeline.default_parameters())
         validation_files = list(protocol.development())
         optimizer = Optimizer(pipeline)
@@ -202,6 +209,79 @@ class TuneCommand(BaseCommand):
         params_filepath: Path = args.exp_dir / args.params
         logging.info(f"Saving params to {params_filepath}")
         pipeline.instantiate(best_params)
+        pipeline.dump_params(params_filepath)
+
+
+class TuneScipyCommand(BaseCommand):
+    COMMAND = "tunescipy"
+    DESCRIPTION = "tune the model hyperparameters using scipy"
+
+    @classmethod
+    def init_parser(cls, parser: ArgumentParser):
+        parser.add_argument("-p", "--protocol", type=str,
+                            default="VTCDebug.SpeakerDiarization.PoetryRecitalDiarization",
+                            help="Pyannote database")
+        parser.add_argument("--classes", choices=CLASSES.keys(),
+                            required=True,
+                            type=str, help="Model model checkpoint")
+        parser.add_argument("-m", "--model_path", type=Path, required=True,
+                            help="Model checkpoint to tune pipeline with")
+        parser.add_argument("--metric", choices=["fscore", "ier"],
+                            default="fscore")
+        parser.add_argument("--params", type=Path, default=Path("best_params.yml"),
+                            help="Filename for param yaml file")
+
+    @classmethod
+    def run(cls, args: Namespace):
+        protocol = cls.get_protocol(args)
+        model = Model.from_pretrained(
+            Path(args.model_path),
+            strict=False,
+        )
+        # Dirty fix for the non-serialization of the task params
+        pipeline = MultilabelSegmentationPipeline(segmentation=model,
+                                                  fscore=args.metric == "fscore", share_min_duration=True)
+        # pipeline.instantiate(pipeline.default_parameters())
+        validation_files = list(protocol.development())
+
+        params = {
+            "min_duration_off": 0.1,
+            "min_duration_on": 0.1,
+        }
+        def fun(threshold, considered_label):
+            pipeline.instantiate({'thresholds' : {considered_label: {
+                "onset": threshold,
+                "offset": threshold
+            }}})
+            metric = pipeline.get_metric()
+            validate = partial(validate_helper_func,
+                                pipeline=pipeline,
+                                metric=metric,
+                                label=considered_label)
+
+            for file in validation_files:
+                _ = validate(file)
+            return 1. - abs(metric)
+            
+        label_names = CLASSES[args.classes]["classes"] +\
+                        list(CLASSES[args.classes]["unions"].keys()) +\
+                        list(CLASSES[args.classes]["intersections"].keys())
+        params["thresholds"] = {label: {"onset": random(), "offset": random()} for label in label_names}
+        print(params)
+        pipeline.instantiate(params)
+        for label in label_names:
+            res = scipy.optimize.minimize_scalar(
+                fun, bounds=(0., 1.), method='bounded', options={'maxiter': 10}, args=label
+            )
+
+            threshold = res.x.item()
+            params["thresholds"][label] = {'onset': threshold, 'offset': threshold}
+            pipeline.instantiate(params)
+
+        print(params)
+        params_filepath: Path = args.exp_dir / args.params
+        logging.info(f"Saving params to {params_filepath}")
+        pipeline.instantiate(params)
         pipeline.dump_params(params_filepath)
 
 
@@ -231,7 +311,7 @@ class ApplyCommand(BaseCommand):
             Path(args.model_path),
             strict=False,
         )
-        pipeline = MultilabelSegmentationPipeline(segmentation=model)
+        pipeline = MultilabelSegmentationPipeline(segmentation=model, share_min_duration=True)
         params_path: Path = args.params if args.params is not None else args.exp_dir / "best_params.yml"
         pipeline.load_params(params_path)
         apply_folder: Path = args.exp_dir / "apply/" if args.apply_folder is None else args.apply_folder
@@ -293,7 +373,7 @@ class ScoreCommand(BaseCommand):
             df.to_csv(args.report_path)
 
 
-commands = [TrainCommand, TuneCommand, ApplyCommand, ScoreCommand]
+commands = [TrainCommand, TuneCommand, TuneScipyCommand, ApplyCommand, ScoreCommand]
 
 argparser = argparse.ArgumentParser()
 argparser.add_argument("-v", "--verbose", action="store_true",
