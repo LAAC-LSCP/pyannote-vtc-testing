@@ -83,3 +83,9 @@ python main.py runs/experiment/ score \
     --apply_folder runs/experiment/apply/ \
     --report_path runs/experiment/results/fscore.csv
 ```
+
+## Pre-trained model
+
+You can find a pre-trained model here  : `model_vtc2/checkpoints/best.ckpt`
+
+This model was trained with Pyannote 2.0, with a F-score of 61.27.

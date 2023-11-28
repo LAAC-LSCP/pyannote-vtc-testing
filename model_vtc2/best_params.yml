@@ -1,0 +1,19 @@
+params:
+  min_duration_off: 0.1
+  min_duration_on: 0.1
+  thresholds:
+    CHI:
+      offset: 0.2271385034636148
+      onset: 0.2271385034636148
+    FEM:
+      offset: 0.38535826583802685
+      onset: 0.38535826583802685
+    KCHI:
+      offset: 0.27008255621867466
+      onset: 0.27008255621867466
+    MAL:
+      offset: 0.2532194189833808
+      onset: 0.2532194189833808
+    SPEECH:
+      offset: 0.3844325745662405
+      onset: 0.3844325745662405
