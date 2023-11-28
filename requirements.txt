@@ -1,1 +1,2 @@
-git+ssh://git@github.com/pyannote/pyannote-audio.git@develop#egg=pyannote.audio
+pyannote.audio==2.1.1
+torchmetrics==0.8.0

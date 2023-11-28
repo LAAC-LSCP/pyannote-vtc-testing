@@ -45,10 +45,7 @@ class ProcessorChain:
 
 DEVICE = "gpu" if torch.cuda.is_available() else "cpu"
 
-CLASSES = {"vtcdebug": {'classes': ["READER", "AGREER", "DISAGREER"],
-                        'unions': {"COMMENTERS": ["AGREER", "DISAGREER"]},
-                        'intersections': {}},
-           "basal_voice": {'classes': ["P", "NP"],
+CLASSES = {"basal_voice": {'classes': ["P", "NP"],
                            'unions': {},
                            'intersections': {}},
            "babytrain": {'classes': ["MAL", "FEM", "CHI", "KCHI"],
@@ -106,13 +103,13 @@ class TrainCommand(BaseCommand):
     @classmethod
     def init_parser(cls, parser: ArgumentParser):
         parser.add_argument("-p", "--protocol", type=str,
-                            default="VTCDebug.SpeakerDiarization.PoetryRecitalDiarization",
+                            default="X.SpeakerDiarization.BBT2",
                             help="Pyannote database")
         parser.add_argument("--classes", choices=CLASSES.keys(),
-                            required=True,
+                            default="babytrain",
                             type=str, help="Model architecture")
         parser.add_argument("--model_type", choices=["simple", "pyannet"],
-                            required=True,
+                            default="pyannet",
                             type=str, help="Model model checkpoint")
         parser.add_argument("--resume", action="store_true",
                             help="Resume from last checkpoint")
@@ -169,22 +166,22 @@ class TrainCommand(BaseCommand):
         trainer.fit(model)
 
 
-class TuneCommand(BaseCommand):
-    COMMAND = "tune"
+class TuneOptunaCommand(BaseCommand):
+    COMMAND = "tuneoptuna"
     DESCRIPTION = "tune the model hyperparameters using optuna"
 
     @classmethod
     def init_parser(cls, parser: ArgumentParser):
         parser.add_argument("-p", "--protocol", type=str,
-                            default="VTCDebug.SpeakerDiarization.PoetryRecitalDiarization",
+                            default="X.SpeakerDiarization.BBT2",
                             help="Pyannote database")
         parser.add_argument("--classes", choices=CLASSES.keys(),
-                            required=True,
+                            default="babytrain",
                             type=str, help="Model model checkpoint")
         parser.add_argument("-m", "--model_path", type=Path, required=True,
                             help="Model checkpoint to tune pipeline with")
         parser.add_argument("-nit", "--n_iterations", type=int, default=50,
-                            help="Number of tuning iterations")
+                            help="Number of tuning iterations, rule of thumb is 10^(number or parameters to optimize)")
         parser.add_argument("--metric", choices=["fscore", "ier"],
                             default="fscore")
         parser.add_argument("--params", type=Path, default=Path("best_params.yml"),
@@ -214,17 +211,17 @@ class TuneCommand(BaseCommand):
         pipeline.dump_params(params_filepath)
 
 
-class TuneScipyCommand(BaseCommand):
-    COMMAND = "tunescipy"
+class TuneCommand(BaseCommand):
+    COMMAND = "tune"
     DESCRIPTION = "tune the model hyperparameters using scipy"
 
     @classmethod
     def init_parser(cls, parser: ArgumentParser):
         parser.add_argument("-p", "--protocol", type=str,
-                            default="VTCDebug.SpeakerDiarization.PoetryRecitalDiarization",
+                            default="X.SpeakerDiarization.BBT2",
                             help="Pyannote database")
         parser.add_argument("--classes", choices=CLASSES.keys(),
-                            required=True,
+                            default="babytrain",
                             type=str, help="Model model checkpoint")
         parser.add_argument("-m", "--model_path", type=Path, required=True,
                             help="Model checkpoint to tune pipeline with")
@@ -243,7 +240,6 @@ class TuneScipyCommand(BaseCommand):
         # Dirty fix for the non-serialization of the task params
         pipeline = MultilabelSegmentationPipeline(segmentation=model,
                                                   fscore=args.metric == "fscore", share_min_duration=True)
-        # pipeline.instantiate(pipeline.default_parameters())
         validation_files = list(protocol.development())
 
         params = {
@@ -292,10 +288,10 @@ class ApplyCommand(BaseCommand):
     @classmethod
     def init_parser(cls, parser: ArgumentParser):
         parser.add_argument("-p", "--protocol", type=str,
-                            default="VTCDebug.SpeakerDiarization.PoetryRecitalDiarization",
+                            default="X.SpeakerDiarization.BBT2",
                             help="Pyannote database")
         parser.add_argument("--classes", choices=CLASSES.keys(),
-                            required=True,
+                            default="babytrain",
                             type=str, help="Model model checkpoint")
         parser.add_argument("-m", "--model_path", type=Path, required=True,
                             help="Model checkpoint to run pipeline with")
@@ -331,12 +327,12 @@ class ScoreCommand(BaseCommand):
     @classmethod
     def init_parser(cls, parser: ArgumentParser):
         parser.add_argument("-p", "--protocol", type=str,
-                            default="VTCDebug.SpeakerDiarization.PoetryRecitalDiarization",
+                            default="X.SpeakerDiarization.BBT2",
                             help="Pyannote database")
         parser.add_argument("--apply_folder", type=Path,
                             help="Path to the inference files")
         parser.add_argument("--classes", choices=CLASSES.keys(),
-                            required=True,
+                            default="babytrain",
                             type=str, help="Model architecture")
         parser.add_argument("--metric", choices=["fscore", "ier"],
                             default="fscore")
@@ -373,7 +369,7 @@ class ScoreCommand(BaseCommand):
             df.to_csv(args.report_path)
 
 
-commands = [TrainCommand, TuneCommand, TuneScipyCommand, ApplyCommand, ScoreCommand]
+commands = [TrainCommand, TuneCommand, TuneOptunaCommand, ApplyCommand, ScoreCommand]
 
 argparser = argparse.ArgumentParser()
 argparser.add_argument("-v", "--verbose", action="store_true",
