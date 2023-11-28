@@ -118,6 +118,8 @@ class TrainCommand(BaseCommand):
                             help="Resume from last checkpoint")
         parser.add_argument("--epoch", type=int, required=True,
                             help="Number of train epoch")
+        parser.add_argument("--num_lstm_layers", type=int, default=2,
+                            help="Number of LSTM layers in PyanNet, default = 2")
 
     @classmethod
     def run(cls, args: Namespace):
@@ -127,7 +129,7 @@ class TrainCommand(BaseCommand):
         if args.model_type == "simple":
             model = SimpleSegmentationModel(task=vtc)
         else:
-            model = PyanNet(task=vtc)
+            model = PyanNet(task=vtc, lstm={"num_layers": args.num_lstm_layers})
 
         value_to_monitor, min_or_max = vtc.val_monitor
 
