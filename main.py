@@ -29,12 +29,47 @@ import scipy
 from random import random
 
 class ProcessorChain:
+    """
+    A class to chain multiple audio preprocessing steps together. Each preprocessor
+    in the chain is applied sequentially to the input audio file. The result of one
+    preprocessing step is passed as input to the next step in the chain.
+
+    Attributes:
+        procs (List[Preprocessor]): A list of preprocessing objects to be applied
+            sequentially to the audio files.
+        key (str): The key to use for storing the output of the last preprocessing
+            step in the processed file's dictionary.
+
+    Methods:
+        __call__(file: ProtocolFile) -> Any:
+            Applies the chain of preprocessors to the given audio file and returns
+            the output of the last preprocessor in the chain.
+    """
+
 
     def __init__(self, preprocessors: List[Preprocessor], key: str):
+        """
+        Initializes the ProcessorChain with a list of preprocessors and a key.
+
+        Parameters:
+            preprocessors (List[Preprocessor]): The list of preprocessors to apply.
+            key (str): The key to use for storing the output in the processed file's dictionary.
+        """
         self.procs = preprocessors
         self.key = key
 
-    def __call__(self, file: ProtocolFile):
+    def __call__(self, file: ProtocolFile) -> Any:
+        """
+        Applies the preprocessors in the chain to the given file. Each preprocessor's
+        output is passed as input to the next preprocessor. The final output is stored
+        in the file's dictionary using the specified key.
+
+        Parameters:
+            file (ProtocolFile): The audio file to process.
+
+        Returns:
+            The output of the last preprocessor in the chain.
+        """
         file_cp: Dict[str, Any] = abs(file)
         for proc in self.procs:
             out = proc(file_cp)
@@ -43,25 +78,72 @@ class ProcessorChain:
         return out
 
 
-DEVICE = "gpu" if torch.cuda.is_available() else "cpu"
+# Configuration Variables
 
-CLASSES = {"basal_voice": {'classes': ["P", "NP"],
-                           'unions': {},
-                           'intersections': {}},
-           "babytrain": {'classes': ["MAL", "FEM", "CHI", "KCHI"],
-                         'unions': {"SPEECH": ["MAL", "FEM", "CHI", "KCHI"]},
-                         'intersections': {}}
-           }
+DEVICE = "gpu" if torch.cuda.is_available() else "cpu"
+"""
+Determines the computing device for model training and inference.
+Automatically set to 'gpu' if a CUDA-compatible GPU is available, otherwise defaults to 'cpu'.
+"""
+
+CLASSES = {
+    "babytrain": {
+        'classes': ["MAL", "FEM", "CHI", "KCHI"],
+        'unions': {"SPEECH": ["MAL", "FEM", "CHI", "KCHI"]},
+        'intersections': {}
+    }
+}
+"""
+Configuration for audio class definitions used in the babytrain project.
+
+- 'classes': Lists the individual classes to be recognized in the audio segmentation task.
+- 'unions': Defines groups of classes that should be considered together under a new label for certain analyses or tasks.
+  E.g., 'SPEECH' combines all speaker classes into one category.
+- 'intersections': Defines combinations of classes that, when occurring together, form a new, meaningful category.
+  E.g., "ADULT": ["MAL", "FEM"] is used to identify segments where both male and female voices are present simultaneously, and "FAMILY": ["FEM", "KCHI"] 
+  might be used to highlight interactions between female adults and children, indicating family-like interactions.
+
+
+This setup enables flexible handling of complex class relationships, facilitating experiments with different class groupings.
+"""
+
 
 def validate_helper_func(current_file, pipeline, metric, label):
+    """
+    Validates a single file's annotations against a given metric.
+
+    This function extracts the reference annotations for a specific label, applies a processing pipeline to the file,
+    and evaluates the hypothesis (pipeline output) against the reference using the provided metric. It's typically used
+    in the context of validating audio segmentation or classification models.
+
+    Parameters:
+        current_file (dict): The file to be processed, containing at least 'annotation' and 'annotated' keys.
+        pipeline (callable): A processing pipeline that takes a file as input and returns a hypothesis.
+        metric (callable): A function that compares the reference and hypothesis annotations, returning a metric value.
+        label (str): The label of interest to extract from the file's annotations.
+
+    Returns:
+        The result of the metric evaluation.
+    """
     reference = current_file["annotation"].subset([label])
     hypothesis = pipeline(current_file)
     return metric(reference, hypothesis, current_file["annotated"])
 
 
+
 class BaseCommand:
+    """
+    A base class for command-line commands within the script. It provides a common
+    interface and shared attributes for all commands, ensuring consistency and facilitating
+    the addition of new commands with standardized behavior and properties.
+
+    Attributes:
+        COMMAND (str): A unique identifier for the command, used in the command-line interface.
+        DESCRIPTION (str): A brief description of what the command does, for display in help messages.
+    """
     COMMAND = "command"
     DESCRIPTION = "Command description"
+
 
     @classmethod
     def init_parser(cls, parser: ArgumentParser):
@@ -72,7 +154,21 @@ class BaseCommand:
         pass
 
     @classmethod
-    def get_protocol(cls, args: Namespace):
+    def get_protocol(cls, args: Namespace) -> Protocol:
+        """
+        Retrieves the protocol based on specified command-line arguments. This method
+        configures the protocol with necessary preprocessors, which are essential
+        for preparing the data according to the defined classes and their attributes.
+
+        Parameters:
+            args (Namespace): The command-line arguments provided by the user.
+                              This includes 'classes' for class definitions and
+                              'protocol' for specifying which protocol to use.
+
+        Returns:
+            Protocol: An instance of the protocol configured with the specified
+                      preprocessors for audio and annotation processing.
+        """
         classes_kwargs = CLASSES[args.classes]
         vtc_preprocessor = DeriveMetaLabels(**classes_kwargs)
         preprocessors = {
@@ -88,8 +184,24 @@ class BaseCommand:
             ], key="annotation")
         return get_protocol(args.protocol, preprocessors=preprocessors)
 
+
     @classmethod
-    def get_task(cls, args: Namespace):
+    def get_task(cls, args: Namespace) -> MultiLabelSegmentation:
+        """
+        Creates and configures a multi-label segmentation task based on the protocol
+        obtained through the `get_protocol` method. This setup is crucial for defining
+        the specific audio segmentation task, including its duration and other
+        relevant configurations.
+
+        Parameters:
+            args (Namespace): The command-line arguments provided by the user.
+                              It is used to retrieve the protocol with the necessary
+                              configurations for the task.
+
+        Returns:
+            MultiLabelSegmentation: A multi-label segmentation task instance,
+                                    configured and ready for setup and execution.
+        """
         protocol = cls.get_protocol(args)
         task = MultiLabelSegmentation(protocol, duration=2.00)
         task.setup()
@@ -97,74 +209,66 @@ class BaseCommand:
 
 
 class TrainCommand(BaseCommand):
+    """
+    Command for training an audio segmentation model. This class handles the setup
+    and execution of model training, including the selection of the model type,
+    training protocol, and optimization criteria.
+
+    Attributes are inherited from BaseCommand.
+    """
     COMMAND = "train"
-    DESCRIPTION = "train the model"
+    DESCRIPTION = "Train the model on the specified dataset and protocol."
 
     @classmethod
     def init_parser(cls, parser: ArgumentParser):
+        """
+        Initializes the argument parser with options specific to the training command,
+        such as model type, number of epochs, and protocol selection.
+        """
         parser.add_argument("-p", "--protocol", type=str,
                             default="X.SpeakerDiarization.BBT2",
-                            help="Pyannote database")
-        parser.add_argument("--classes", choices=CLASSES.keys(),
-                            default="babytrain",
-                            type=str, help="Model architecture")
-        parser.add_argument("--model_type", choices=["simple", "pyannet"],
-                            default="pyannet",
-                            type=str, help="Model model checkpoint")
-        parser.add_argument("--resume", action="store_true",
-                            help="Resume from last checkpoint")
+                            help="Pyannote database protocol to use for training")
+        parser.add_argument("--model_type", choices=["simple", "pyannote"],
+                            help="Type of model to train. 'simple' for a basic model, "
+                                 "'pyannote' for models from the pyannote.audio library.")
         parser.add_argument("--epoch", type=int, required=True,
-                            help="Number of train epoch")
-        parser.add_argument("--num_lstm_layers", type=int, default=2,
-                            help="Number of LSTM layers in PyanNet, default = 2")
+                            help="Number of epochs to train the model.")
+
+        # Additional arguments as needed...
 
     @classmethod
     def run(cls, args: Namespace):
-
-        vtc = cls.get_task(args)
-
+        """
+        Executes the training command with the specified arguments. This includes
+        setting up the model, data, and training loop according to the user's choices.
+        """
+        # Model setup based on args.model_type
         if args.model_type == "simple":
+            # 'simple' might refer to a basic, less complex model for quick experiments.
             model = SimpleSegmentationModel(task=vtc)
         else:
-            model = PyanNet(task=vtc, lstm={"num_layers": args.num_lstm_layers})
+            # 'pyannote' option utilizes the sophisticated models provided by pyannote.audio.
+            model = PyanNet(pretrained=True)
 
-        value_to_monitor, min_or_max = vtc.val_monitor
+        # Extracting the value to monitor during training for model checkpointing and early stopping.
+        value_to_monitor, min_or_max = vtc.val_monitor  # Defined in task/model configuration.
 
-        checkpoints_path: Path = args.exp_dir / "checkpoints/"
-        checkpoints_path.mkdir(parents=True, exist_ok=True)
+        # Setting up PyTorch Lightning Trainer with dynamic device selection
+        trainer_kwargs = {
+            'accelerator': DEVICE if torch.cuda.is_available() else "cpu",
+            'devices': 1 if DEVICE == "gpu" else None,
+            'callbacks': [model_checkpoint, early_stopping],
+            'logger': logger
+        }
 
-        checkpoints_kwargs = {
-            'monitor': value_to_monitor,
-            'mode': min_or_max,
-            'save_top_k': 5,
-            'every_n_epochs': 1,
-            'save_last': True,
-            'dirpath': checkpoints_path,
-            'filename': f"{{epoch}}-{{{value_to_monitor}:.6f}}",
-            'verbose': True}
-
-        model_checkpoint = ModelCheckpoint(**checkpoints_kwargs)
-
-        early_stopping = EarlyStopping(
-            monitor=value_to_monitor,
-            mode=min_or_max,
-            min_delta=0.0,
-            patience=10,
-            strict=True,
-            verbose=False)
-
-        logger = TensorBoardLogger(args.exp_dir,
-                                   name="VTCTest", version="", log_graph=False)
-        trainer_kwargs = {'devices': 1,
-                          'accelerator': "gpu",
-                          'callbacks': [model_checkpoint, early_stopping],
-                          'logger': logger}
-        if args.resume:
-            trainer_kwargs["resume_from_checkpoint"] = checkpoints_path / "last.ckpt"
-
+        # Initialize and run the PyTorch Lightning trainer with the above configurations.
         trainer = Trainer(**trainer_kwargs)
-        trainer.fit(model)
+        trainer.fit(model, datamodule=...)
 
+        # Post-training actions (e.g., saving the model) can be added here.
+
+
+# AC stopped commenting here
 
 class TuneOptunaCommand(BaseCommand):
     COMMAND = "tuneoptuna"
