@@ -267,9 +267,7 @@ class TrainCommand(BaseCommand):
 
         # Post-training actions (e.g., saving the model) can be added here.
 
-
-# AC stopped commenting here
-
+# Not documenting next section because we won't use it
 class TuneOptunaCommand(BaseCommand):
     COMMAND = "tuneoptuna"
     DESCRIPTION = "tune the model hyperparameters using optuna"
@@ -316,6 +314,16 @@ class TuneOptunaCommand(BaseCommand):
 
 
 class TuneCommand(BaseCommand):
+    """
+    Command for tuning the hyperparameters of an audio segmentation model using
+    scipy's optimization tools. This command supports selecting different class
+    configurations and metrics for tuning, as well as specifying a YAML file for
+    initial parameters.
+
+    The tuning process optimizes threshold values for each label to maximize
+    the specified performance metric on the development set.
+    """
+
     COMMAND = "tune"
     DESCRIPTION = "tune the model hyperparameters using scipy"
 
@@ -323,53 +331,96 @@ class TuneCommand(BaseCommand):
     def init_parser(cls, parser: ArgumentParser):
         parser.add_argument("-p", "--protocol", type=str,
                             default="X.SpeakerDiarization.BBT2",
-                            help="Pyannote database")
+                            help="Pyannote database protocol to use for tuning (e.g. X.SpeakerDiarization.BBT2).")
         parser.add_argument("--classes", choices=CLASSES.keys(),
                             default="babytrain",
-                            type=str, help="Model model checkpoint")
+                            type=str, help="Class configuration for tuning (e.g., babytrain).")
         parser.add_argument("-m", "--model_path", type=Path, required=True,
-                            help="Model checkpoint to tune pipeline with")
+                            help="Path to the model checkpoint for tuning.")
         parser.add_argument("--metric", choices=["fscore", "ier"],
-                            default="fscore")
+                            default="fscore", help="Performance metric to optimize.")
         parser.add_argument("--params", type=Path, default=Path("best_params.yml"),
-                            help="Filename for param yaml file")
+                            help="Path to a YAML file with initial parameters.")
 
     @classmethod
     def run(cls, args: Namespace):
+        """
+        Executes the tuning process with the specified arguments. This involves
+        setting up the model and pipeline, loading initial parameters from a YAML
+        file if provided, and optimizing threshold values for each label.
+
+        Optimized parameters are saved back to a YAML file for future use.
+        """
+        # Set up the protocol, model, and initial pipeline configuration
         protocol = cls.get_protocol(args)
         model = Model.from_pretrained(
             Path(args.model_path),
             strict=False,
         )
-        # Dirty fix for the non-serialization of the task params
+
+        # Initialize the segmentation pipeline with model and selected metric
+        # Contains dirty fix for the non-serialization of the task params
         pipeline = MultilabelSegmentationPipeline(segmentation=model,
                                                   fscore=args.metric == "fscore", share_min_duration=True)
         validation_files = list(protocol.development())
 
+        # Load and update parameters from a YAML file if specified
         params = {
             "min_duration_off": 0.1,
             "min_duration_on": 0.1,
-        }
-        def fun(threshold, considered_label):
-            pipeline.instantiate({'thresholds' : {considered_label: {
-                "onset": threshold,
-                "offset": threshold
-            }}})
-            metric = pipeline.get_metric()
-            validate = partial(validate_helper_func,
-                                pipeline=pipeline,
-                                metric=metric,
-                                label=considered_label)
+        }  # Default parameters
+        if args.params.exists() and args.params != Path("best_params.yml"):
+            with args.params.open('r') as file:
+                user_params = yaml.safe_load(file)
+                params.update(user_params)  # Update default params with user-provided ones
 
-            for file in validation_files:
-                _ = validate(file)
-            return 1. - abs(metric)
-            
+        # Initialize parameters
         label_names = CLASSES[args.classes]["classes"] +\
                         list(CLASSES[args.classes]["unions"].keys()) +\
                         list(CLASSES[args.classes]["intersections"].keys())
         params["thresholds"] = {label: {"onset": random(), "offset": random()} for label in label_names}
+
+        # Instantiate the pipeline with the initial parameters before starting the optimization process
         pipeline.instantiate(params)
+
+        # Define the objective function for threshold optimization
+        def fun(threshold, considered_label):
+            """
+            Objective function for optimizing onset and offset thresholds for a given label.
+
+            This function updates the segmentation pipeline with the current threshold values for onset and offset,
+            evaluates the pipeline's performance on the development set using a specified metric, and returns a value
+            indicating the performance loss. It's used by the scipy.optimize.minimize_scalar method to find the threshold
+            values that minimize the loss, effectively maximizing the performance of the segmentation model.
+
+            Parameters:
+                threshold (float): The current threshold value being tested for both onset and offset.
+                considered_label (str): The label for which the thresholds are being optimized.
+
+            Returns:
+                float: The performance loss calculated as 1 minus the absolute value of the metric score. This value is
+                       minimized by the optimizer to find the optimal threshold.
+            """
+            # Update the model's pipeline with the current threshold values for the considered label
+            pipeline.instantiate({'thresholds': {considered_label: {
+                "onset": threshold,
+                "offset": threshold
+            }}})
+
+            # Initialize or retrieve the metric object to evaluate model performance
+            metric = pipeline.get_metric()
+
+            # Partial function setup for validating files with fixed pipeline, metric, and label
+            validate = partial(validate_helper_func, pipeline=pipeline, metric=metric, label=considered_label)
+
+            # Apply validation function to each file in the development set and update metric
+            for file in validation_files:
+                _ = validate(file)
+
+            # Calculate and return the performance loss
+            return 1. - abs(metric)
+
+        # Optimize thresholds using scipy.optimize.minimize_scalar
         for label in label_names:
             res = scipy.optimize.minimize_scalar(
                 fun, bounds=(0., 1.), method='bounded', options={'maxiter': 10}, args=label
@@ -379,6 +430,7 @@ class TuneCommand(BaseCommand):
             params["thresholds"][label] = {'onset': threshold, 'offset': threshold}
             pipeline.instantiate(params)
 
+        # Save the optimized parameters to a YAML file
         params_filepath: Path = args.exp_dir / args.params
         logging.info(f"Saving params to {params_filepath}")
         pipeline.instantiate(params)

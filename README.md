@@ -3,7 +3,18 @@
 This repo contains the scripts necessary to train, tune, apply and
 score VTC2.0.
 
+## In oberon
+
+- to be added - probably envt already exists...
+
 ## Installation
+
+First, install this experimental repository & cd into it:
+
+```shell
+git clone https://github.com/marianne-m/pyannote-vtc-testing.git
+cd pyannote-vtc-testing
+```
 
 Install pyannote.audio==2.0
 
@@ -11,11 +22,6 @@ Install pyannote.audio==2.0
 pip install -r requirements.txt
 ```
 
-Then, install this experimental repository :
-
-```shell
-git clone https://github.com/marianne-m/pyannote-vtc-testing.git
-```
 
 Make sure you have a `database.yml` file in `~/.pyannote`.
 
